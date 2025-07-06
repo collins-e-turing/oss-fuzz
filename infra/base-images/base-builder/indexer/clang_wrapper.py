@@ -478,6 +478,14 @@ def remove_invalid_coverage_flags(argv: Sequence[str]) -> list[str]:
 
 
 def main(argv: list[str]) -> None:
+
+  # DEBUG: Print a clear marker to confirm the wrapper is running
+  print("[CLANG_WRAPPER_DEBUG] clang_wrapper.py is active! argv:", argv, file=sys.stderr)
+
+  # Deep debug: print output file and decision points
+  output_file = get_flag_value(argv, "-o")
+  print(f"[WRAPPER_DEBUG] Raw argv: {argv}", file=sys.stderr)
+  print(f"[WRAPPER_DEBUG] Detected output_file: {output_file}", file=sys.stderr)
   argv = expand_rsp_file(argv)
   argv = remove_flag_if_present(argv, "-gline-tables-only")
   argv = force_optimization_flag(argv)
@@ -496,25 +504,49 @@ def main(argv: list[str]) -> None:
       t for t in os.getenv("INDEXER_TARGETS", "").split(",") if t
   ]
 
+  # --- Meson/autotools test file skip logic ---
+  # If the output file is a known test/probe file, skip indexing even if fuzzing flags are present.
+  # Covers: testfile*, conftest*, and any file in meson-private/ directories.
+  def is_test_probe_file(path: Path) -> bool:
+    name = path.name
+    if name.startswith("testfile") or name.startswith("conftest"):
+      return True
+    # Check if any parent directory is meson-private
+    for parent in path.parents:
+      if parent.name == "meson-private":
+        return True
+    return False
+
+  # Defensive: output_file may be None at this point
+  _output_file_str = get_flag_value(argv, "-o")
+  if _output_file_str:
+    _output_file_path = Path(_output_file_str)
+    if is_test_probe_file(_output_file_path):
+      print(f"[WRAPPER_DEBUG] Skipping: Output file {_output_file_path} is a Meson/autotools test/probe file", file=sys.stderr)
+      execute(argv)
+
   # If we are linking, collect the relevant flags and dependencies.
   output_file = get_flag_value(argv, "-o")
+
   if not output_file:
+    print(f"[WRAPPER_DEBUG] Skipping: No output file (-o) found", file=sys.stderr)
     execute(argv)  # Missing output file
 
   output_file = Path(output_file)
 
   if output_file.name.endswith(".o"):
+    print(f"[WRAPPER_DEBUG] Skipping: Output file ends with .o ({output_file})", file=sys.stderr)
     execute(argv)  # Not a real linker command
 
   if indexer_targets:
     if output_file.name not in indexer_targets:
-      # Not a relevant linker command
-      print(f"Not indexing as {output_file} is not in the allowlist")
+      print(f"[WRAPPER_DEBUG] Skipping: {output_file.name} not in allowlist {indexer_targets}", file=sys.stderr)
       execute(argv)
   elif not fuzzing_engine_in_argv:
-    # Not a fuzz target.
+    print(f"[WRAPPER_DEBUG] Skipping: Not a fuzz target (no fuzzing engine in argv)", file=sys.stderr)
     execute(argv)
 
+  print(f"[WRAPPER_DEBUG] Indexer logic triggered for: {output_file}", file=sys.stderr)
   print(f"Linking {argv}")
 
   cdb_path = get_flag_value(argv, "-gen-cdb-fragment-path")
