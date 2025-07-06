@@ -27,6 +27,11 @@ from typing import Sequence
 import unittest
 
 import manifest_types
+import logging  # Add logging module
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 THIS_DIR = pathlib.Path(__file__).parent
 OSS_FUZZ_DIR = THIS_DIR.parent.parent.parent.parent
@@ -62,8 +67,11 @@ class IndexBuildTest(unittest.TestCase):
     ]
 
     if additional_args:
+      logger.info(f"Additional args received: {additional_args}")
       docker_args.extend(additional_args)
-
+    
+    logger.info(f"Running Docker command: {' '.join(docker_args)}")
+    
     file_suffix = '.tar'
     if compressed:
       docker_args.append('--compressed')

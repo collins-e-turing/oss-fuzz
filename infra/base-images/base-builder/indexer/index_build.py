@@ -14,6 +14,7 @@
 # limitations under the License.
 
 """This runs the actual build process to generate a snapshot."""
+print("=== DEBUG: index_build.py has started ===", flush=True)
 
 import argparse
 import dataclasses
@@ -27,6 +28,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from typing import Any, Sequence
 
@@ -44,7 +46,7 @@ INDEXES_PATH = Path(os.getenv('INDEXES_PATH', '/indexes'))
 _LD_BINARY = 'ld-linux-x86-64.so.2'
 _LD_PATH = Path('/lib64') / _LD_BINARY
 _LLVM_READELF_PATH = '/usr/local/bin/llvm-readelf'
-_CLANG_VERSION = '18'
+_CLANG_VERSION = os.getenv('CLANG_VERSION','18')
 
 EXPECTED_COVERAGE_FLAGS = '-fsanitize-coverage=bb,no-prune,trace-pc-guard'
 
@@ -88,12 +90,15 @@ def set_up_wrapper_dir():
   """
   real_dir = '/usr/local/bin'
   indexer_dir = '/opt/indexer'
-  for name in os.listdir():
+  for name in ['clang', 'clang++']:
     src = os.path.join(real_dir, name)
     dst = os.path.join(indexer_dir, name)
-    if name not in {'clang', 'clang++'}:
-      continue
-    os.symlink(src, dst)
+    try:
+      if os.path.lexists(dst):
+        os.remove(dst)
+      os.symlink(src, dst)
+    except Exception as e:
+      logging.warning(f"Could not create symlink {dst} -> {src}: {e}")
 
 
 @dataclasses.dataclass(slots=True, frozen=True)
@@ -221,8 +226,11 @@ def enumerate_build_targets(
     A sequence of target descriptions, in BinaryMetadata form.
   """
 
-  logging.info('enumerate_build_targets')
+  logging.info('enumerate_build_targets started')
+  logging.info(f'Searching for linker JSONs in: {OUT / "cdb"}')
+  
   linker_json_paths = list((OUT / 'cdb').glob('*_linker_commands.json'))
+  logging.info(f'Found linker JSON paths: {linker_json_paths}')
 
   logging.info('Found %i linker JSON files.', len(linker_json_paths))
   binary_to_build_metadata: dict[str, BinaryMetadata] = {}
@@ -299,7 +307,12 @@ def build_project(
     binaries_only: bool = False,
 ):
   """Build the actual project."""
+  logging.info(f"build_project called with targets_to_index={targets_to_index}, compile_args={compile_args}")
+  
   set_env_vars()
+  # Set up wrapper dir first to ensure symlinks are created before using them
+  set_up_wrapper_dir()
+  
   if targets_to_index:
     os.environ['INDEXER_TARGETS'] = ','.join(targets_to_index)
 
@@ -350,7 +363,9 @@ def build_project(
   if os.path.exists(lib_fuzzing_engine):
     os.remove(lib_fuzzing_engine)
   os.symlink('/opt/indexer/fuzzing_engine.a', lib_fuzzing_engine)
-  set_up_wrapper_dir()
+  
+  # Set up wrapper dir already called at the beginning of this function
+  # set_up_wrapper_dir()
 
   compile_command = ['/usr/local/bin/compile']
   if compile_args:
@@ -548,18 +563,25 @@ def test_and_archive(
     file_extension: str,
 ):
   """Test target and archive."""
+  logging.info(f"test_and_archive called with targets_to_index={targets_to_index}")
+  
   targets = enumerate_build_targets(binary_config)
+  all_target_names = [t.binary_config.binary_name for t in targets]
+  logging.info(f"All available targets: {all_target_names}")
+  
   if targets_to_index:
-    targets = [
-        t for t in targets if t.binary_config.binary_name in targets_to_index
-    ]
-    missing_targets = set(targets_to_index) - set(
-        t.binary_config.binary_name for t in targets
-    )
+    logging.info(f"Filtering targets based on targets_to_index: {targets_to_index}")
+    filtered_targets = [t for t in targets if t.binary_config.binary_name in targets_to_index]
+    filtered_target_names = [t.binary_config.binary_name for t in filtered_targets]
+    logging.info(f"Filtered targets that will be processed: {filtered_target_names}")
+    
+    missing_targets = set(targets_to_index) - set(all_target_names)
     if missing_targets:
-      raise ValueError(f'Could not find specified targets {missing_targets}.')
+      logging.error(f'Could not find specified targets: {missing_targets}')
+      logging.error(f'Available targets were: {all_target_names}')
+      raise ValueError(f'Could not find specified targets: {missing_targets}')
 
-  logging.info('targets %s', targets)
+  logging.info('Found targets: %s', targets)
   for target in targets:
     try:
       # Check that the target binary behaves like a fuzz target,
@@ -584,7 +606,11 @@ def clear_out():
 
 
 def main():
-  logging.basicConfig(level=logging.INFO)
+  """Build the project and generate an archive for each target."""
+  logging.basicConfig(
+      level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  )
+  INDEXES_PATH.mkdir(exist_ok=True)
 
   parser = argparse.ArgumentParser(description='Index builder.')
   parser.add_argument(
@@ -678,6 +704,10 @@ def main():
       ),
   )
   args = parser.parse_args()
+  
+  # Log all received arguments
+  logging.info(f"All args received: {args}")
+  logging.info(f"Command line arguments: {sys.argv}")
 
   INDEXES_PATH.mkdir(exist_ok=True)
 
@@ -755,6 +785,7 @@ def main():
   targets_to_index = None
   if args.targets:
     targets_to_index = args.targets.split(',')
+    logging.info(f"Targets to index (split from args.targets='{args.targets}'): {targets_to_index}")
 
   for directory in ['aflplusplus', 'fuzztest', 'honggfuzz', 'libfuzzer']:
     path = os.path.join(os.environ['SRC'], directory)
