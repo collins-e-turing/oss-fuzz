@@ -482,6 +482,20 @@ def main(argv: list[str]) -> None:
   # DEBUG: Print a clear marker to confirm the wrapper is running
   print("[CLANG_WRAPPER_DEBUG] clang_wrapper.py is active! argv:", argv, file=sys.stderr)
 
+  # Handle informational commands that don't need output files
+  informational_flags = ['--version', '-v', '--help', '-h', '--target-help', '-dumpversion', '-print-target-triple', '-print-search-dirs']
+  linker_info_flags = ['-Wl,--version', '-Wl,--help']
+  
+  # Check for informational flags or linker detection
+  if any(flag in argv for flag in informational_flags):
+    print(f"[WRAPPER_DEBUG] Informational command detected, passing through: {argv}", file=sys.stderr)
+    execute(argv)
+  
+  # Check for linker detection commands (like -Wl,--version)
+  if any(flag in argv for flag in linker_info_flags):
+    print(f"[WRAPPER_DEBUG] Linker detection command detected, passing through: {argv}", file=sys.stderr)
+    execute(argv)
+
   # Deep debug: print output file and decision points
   output_file = get_flag_value(argv, "-o")
   print(f"[WRAPPER_DEBUG] Raw argv: {argv}", file=sys.stderr)
