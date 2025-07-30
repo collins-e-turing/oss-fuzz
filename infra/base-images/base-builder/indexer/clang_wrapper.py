@@ -497,6 +497,8 @@ def main(argv: list[str]) -> None:
   if "-E" in argv:
     # Preprocessor-only invocation.
     modified_argv = remove_flag_and_value(argv, "-gen-cdb-fragment-path")
+    if modified_argv is None:
+      raise ValueError("modified_argv cannot be None")
     execute(modified_argv)
 
   fuzzing_engine_in_argv = check_fuzzing_engine_and_fix_argv(argv)
@@ -519,11 +521,12 @@ def main(argv: list[str]) -> None:
 
   # Defensive: output_file may be None at this point
   _output_file_str = get_flag_value(argv, "-o")
-  if _output_file_str:
-    _output_file_path = Path(_output_file_str)
-    if is_test_probe_file(_output_file_path):
-      print(f"[WRAPPER_DEBUG] Skipping: Output file {_output_file_path} is a Meson/autotools test/probe file", file=sys.stderr)
-      execute(argv)
+  if _output_file_str is None:
+    raise ValueError("Output file string cannot be None")
+  _output_file_path = Path(_output_file_str)
+  if is_test_probe_file(_output_file_path):
+    print(f"[WRAPPER_DEBUG] Skipping: Output file {_output_file_path} is a Meson/autotools test/probe file", file=sys.stderr)
+    execute(argv)
 
   # If we are linking, collect the relevant flags and dependencies.
   output_file = get_flag_value(argv, "-o")
@@ -532,6 +535,8 @@ def main(argv: list[str]) -> None:
     print(f"[WRAPPER_DEBUG] Skipping: No output file (-o) found", file=sys.stderr)
     execute(argv)  # Missing output file
 
+  if output_file is None:
+    raise ValueError("output_file cannot be None")
   output_file = Path(output_file)
 
   if output_file.name.endswith(".o"):
